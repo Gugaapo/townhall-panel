@@ -10,23 +10,23 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from starlette.requests import Request
 from starlette_admin import (
-    StringField,
-    TextAreaField,
     BooleanField,
     DateTimeField,
     EnumField,
     IntegerField,
+    StringField,
+    TextAreaField,
     action,
     row_action,
 )
 from starlette_admin.exceptions import ActionFailed
 
 from app.admin.providers.base_motor_model_view import BaseMotorModelView
-from app.db.repositories.document_repository import DocumentRepository
 from app.db.repositories.department_repository import DepartmentRepository
-from app.db.repositories.user_repository import UserRepository
 from app.db.repositories.document_history_repository import DocumentHistoryRepository
-from app.utils.constants import DocumentStatus, DocumentPriority, DocumentAction
+from app.db.repositories.document_repository import DocumentRepository
+from app.db.repositories.user_repository import UserRepository
+from app.utils.constants import DocumentAction, DocumentPriority, DocumentStatus
 
 
 class DocumentView(BaseMotorModelView):
@@ -53,9 +53,9 @@ class DocumentView(BaseMotorModelView):
         StringField(
             "document_number",
             label="Document #",
-            read_only=True,
-            exclude_from_create=True,
-            exclude_from_edit=True,
+            read_only=False,  # temp. change
+            exclude_from_create=False,  # temp. change
+            exclude_from_edit=False,  # temp. change
             searchable=True,
         ),
         StringField(
@@ -202,18 +202,14 @@ class DocumentView(BaseMotorModelView):
 
         # Resolve creator department name
         if doc.get("creator_department_id"):
-            dept = await self.department_repository.find_by_id(
-                doc["creator_department_id"]
-            )
+            dept = await self.department_repository.find_by_id(doc["creator_department_id"])
             doc["creator_department_name"] = dept.get("name", "Unknown") if dept else "Unknown"
         else:
             doc["creator_department_name"] = "Unknown"
 
         # Resolve current holder department name
         if doc.get("current_holder_department_id"):
-            dept = await self.department_repository.find_by_id(
-                doc["current_holder_department_id"]
-            )
+            dept = await self.department_repository.find_by_id(doc["current_holder_department_id"])
             doc["current_holder_department_name"] = dept.get("name", "Unknown") if dept else "Unknown"
         else:
             doc["current_holder_department_name"] = "None"
@@ -323,15 +319,9 @@ class DocumentView(BaseMotorModelView):
         submit_btn_text="Change",
         submit_btn_class="btn-info",
     )
-    async def change_status_pending(
-        self,
-        request: Request,
-        pks: List[Any]
-    ) -> str:
+    async def change_status_pending(self, request: Request, pks: List[Any]) -> str:
         """Bulk change status to pending."""
-        return await self._bulk_change_status(
-            request, pks, DocumentStatus.PENDING.value
-        )
+        return await self._bulk_change_status(request, pks, DocumentStatus.PENDING.value)
 
     @action(
         name="change_status_in_progress",
@@ -340,15 +330,9 @@ class DocumentView(BaseMotorModelView):
         submit_btn_text="Change",
         submit_btn_class="btn-primary",
     )
-    async def change_status_in_progress(
-        self,
-        request: Request,
-        pks: List[Any]
-    ) -> str:
+    async def change_status_in_progress(self, request: Request, pks: List[Any]) -> str:
         """Bulk change status to in_progress."""
-        return await self._bulk_change_status(
-            request, pks, DocumentStatus.IN_PROGRESS.value
-        )
+        return await self._bulk_change_status(request, pks, DocumentStatus.IN_PROGRESS.value)
 
     @action(
         name="change_status_completed",
@@ -357,22 +341,11 @@ class DocumentView(BaseMotorModelView):
         submit_btn_text="Change",
         submit_btn_class="btn-success",
     )
-    async def change_status_completed(
-        self,
-        request: Request,
-        pks: List[Any]
-    ) -> str:
+    async def change_status_completed(self, request: Request, pks: List[Any]) -> str:
         """Bulk change status to completed."""
-        return await self._bulk_change_status(
-            request, pks, DocumentStatus.COMPLETED.value
-        )
+        return await self._bulk_change_status(request, pks, DocumentStatus.COMPLETED.value)
 
-    async def _bulk_change_status(
-        self,
-        request: Request,
-        pks: List[Any],
-        new_status: str
-    ) -> str:
+    async def _bulk_change_status(self, request: Request, pks: List[Any], new_status: str) -> str:
         """Change status for multiple documents."""
         user_id, user_name = await self._get_admin_user_info(request)
         count = 0
@@ -410,15 +383,9 @@ class DocumentView(BaseMotorModelView):
         submit_btn_text="Change",
         submit_btn_class="btn-warning",
     )
-    async def change_priority_high(
-        self,
-        request: Request,
-        pks: List[Any]
-    ) -> str:
+    async def change_priority_high(self, request: Request, pks: List[Any]) -> str:
         """Bulk change priority to high."""
-        return await self._bulk_change_priority(
-            request, pks, DocumentPriority.HIGH.value
-        )
+        return await self._bulk_change_priority(request, pks, DocumentPriority.HIGH.value)
 
     @action(
         name="change_priority_urgent",
@@ -427,22 +394,11 @@ class DocumentView(BaseMotorModelView):
         submit_btn_text="Change",
         submit_btn_class="btn-danger",
     )
-    async def change_priority_urgent(
-        self,
-        request: Request,
-        pks: List[Any]
-    ) -> str:
+    async def change_priority_urgent(self, request: Request, pks: List[Any]) -> str:
         """Bulk change priority to urgent."""
-        return await self._bulk_change_priority(
-            request, pks, DocumentPriority.URGENT.value
-        )
+        return await self._bulk_change_priority(request, pks, DocumentPriority.URGENT.value)
 
-    async def _bulk_change_priority(
-        self,
-        request: Request,
-        pks: List[Any],
-        new_priority: str
-    ) -> str:
+    async def _bulk_change_priority(self, request: Request, pks: List[Any], new_priority: str) -> str:
         """Change priority for multiple documents."""
         user_id, user_name = await self._get_admin_user_info(request)
         count = 0
@@ -452,10 +408,7 @@ class DocumentView(BaseMotorModelView):
             if not doc:
                 continue
 
-            result = await self.repository.update_by_id(
-                str(pk),
-                {"priority": new_priority}
-            )
+            result = await self.repository.update_by_id(str(pk), {"priority": new_priority})
 
             if result:
                 count += 1

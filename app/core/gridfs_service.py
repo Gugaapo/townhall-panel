@@ -1,9 +1,10 @@
-from typing import Optional, BinaryIO, Dict, Any
 from datetime import datetime, timezone
-from bson import ObjectId
+from typing import Any, BinaryIO, Dict, Optional
+
 import gridfs
-from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 import magic  # python-magic for MIME type detection
+from bson import ObjectId
+from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 
 from app.db.mongodb import get_database
 
@@ -27,20 +28,10 @@ class GridFSService:
         filename: str,
         content_type: Optional[str] = None,
         user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Upload a file to GridFS
-
-        Args:
-            file_content: File content as bytes
-            filename: Original filename
-            content_type: MIME type (auto-detected if not provided)
-            user_id: User ID who uploaded the file
-            metadata: Additional metadata to store with the file
-
-        Returns:
-            GridFS file ID as string
         """
         bucket = await self.get_bucket()
 
@@ -57,16 +48,12 @@ class GridFSService:
             "uploaded_at": datetime.now(timezone.utc),
             "uploaded_by": user_id,
             "original_filename": filename,
-            **(metadata or {})
+            "content_type": content_type,
+            **(metadata or {}),
         }
 
         # Upload file
-        file_id = await bucket.upload_from_stream(
-            filename,
-            file_content,
-            metadata=file_metadata,
-            content_type=content_type
-        )
+        file_id = await bucket.upload_from_stream(filename, file_content, metadata=file_metadata)
 
         return str(file_id)
 
@@ -110,7 +97,7 @@ class GridFSService:
                 "content_type": file_doc.content_type,
                 "length": file_doc.length,
                 "upload_date": file_doc.upload_date,
-                "metadata": file_doc.metadata
+                "metadata": file_doc.metadata,
             }
         except gridfs.errors.NoFile:
             return None
@@ -155,12 +142,7 @@ class GridFSService:
         except Exception:
             return False
 
-    async def list_files(
-        self,
-        user_id: Optional[str] = None,
-        skip: int = 0,
-        limit: int = 20
-    ) -> list:
+    async def list_files(self, user_id: Optional[str] = None, skip: int = 0, limit: int = 20) -> list:
         """
         List files in GridFS
 
@@ -184,17 +166,20 @@ class GridFSService:
 
         files = []
         async for file_doc in cursor:
-            files.append({
-                "file_id": str(file_doc["_id"]),
-                "filename": file_doc["filename"],
-                "content_type": file_doc.get("contentType"),
-                "length": file_doc["length"],
-                "upload_date": file_doc["uploadDate"],
-                "metadata": file_doc.get("metadata", {})
-            })
+            files.append(
+                {
+                    "file_id": str(file_doc["_id"]),
+                    "filename": file_doc["filename"],
+                    "content_type": file_doc.get("contentType"),
+                    "length": file_doc["length"],
+                    "upload_date": file_doc["uploadDate"],
+                    "metadata": file_doc.get("metadata", {}),
+                }
+            )
 
         return files
 
 
 # Global GridFS service instance
+gridfs_service = GridFSService()
 gridfs_service = GridFSService()

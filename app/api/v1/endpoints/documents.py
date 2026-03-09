@@ -1,23 +1,28 @@
-from fastapi import APIRouter, HTTPException, status, Depends, Query, BackgroundTasks
 from typing import List, Optional
-from bson import ObjectId
 
+from bson import ObjectId
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+
+from app.core.permissions import require_authenticated
+from app.db.repositories.department_repository import DepartmentRepository
+from app.db.repositories.document_history_repository import DocumentHistoryRepository
+from app.db.repositories.document_repository import DocumentRepository
+from app.db.repositories.user_repository import UserRepository
 from app.schemas.document import (
     DocumentCreate,
-    DocumentUpdate,
-    DocumentResponse,
     DocumentForward,
+    DocumentResponse,
+    DocumentStatus,
     DocumentStatusUpdate,
-    DocumentStatus
+    DocumentUpdate,
 )
-from app.schemas.document_history import DocumentHistoryCreate, DocumentHistoryResponse, DocumentAction
-from app.db.repositories.document_repository import DocumentRepository
-from app.db.repositories.document_history_repository import DocumentHistoryRepository
-from app.db.repositories.user_repository import UserRepository
-from app.db.repositories.department_repository import DepartmentRepository
-from app.services.notification_service import NotificationService
+from app.schemas.document_history import (
+    DocumentAction,
+    DocumentHistoryCreate,
+    DocumentHistoryResponse,
+)
 from app.services.email_service import EmailService
-from app.core.permissions import require_authenticated
+from app.services.notification_service import NotificationService
 from app.utils.constants import UserRole
 
 router = APIRouter()
@@ -55,12 +60,7 @@ def convert_history_ids(history: dict) -> dict:
     return history
 
 
-async def create_audit_entry(
-    document_id: str,
-    action: DocumentAction,
-    user: dict,
-    **kwargs
-):
+async def create_audit_entry(document_id: str, action: DocumentAction, user: dict, **kwargs):
     """Helper to create audit trail entry"""
     history_repo = DocumentHistoryRepository()
 
@@ -70,7 +70,7 @@ async def create_audit_entry(
         "performed_by": str(user["_id"]),
         "performed_by_name": user.get("full_name", "Unknown"),
         "performed_by_department": str(user["department_id"]),
-        **kwargs
+        **kwargs,
     }
 
     await history_repo.create_history_entry(history_data)
@@ -86,13 +86,13 @@ async def create_audit_entry(
         201: {"description": "Document created successfully"},
         400: {"description": "Invalid data"},
         401: {"description": "Not authenticated"},
-        404: {"description": "Department or user not found"}
-    }
+        404: {"description": "Department or user not found"},
+    },
 )
 async def create_document(
     document_data: DocumentCreate,
     background_tasks: BackgroundTasks,
-    current_user: dict = Depends(require_authenticated)
+    current_user: dict = Depends(require_authenticated),
 ):
     """
     Create a new document
@@ -111,10 +111,7 @@ async def create_document(
     if document_data.assigned_to_user_id:
         assigned_user = await user_repo.find_by_id(document_data.assigned_to_user_id)
         if not assigned_user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Assigned user not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assigned user not found")
 
     # Prepare document data
     new_document = {
@@ -126,7 +123,7 @@ async def create_document(
         "creator_department_id": str(current_user["department_id"]),
         "current_holder_department_id": str(current_user["department_id"]),
         "assigned_to_user_id": document_data.assigned_to_user_id,
-        "metadata": document_data.metadata.model_dump() if document_data.metadata else {}
+        "metadata": document_data.metadata.model_dump() if document_data.metadata else {},
     }
 
     # Create document (will auto-generate document number)
@@ -137,7 +134,7 @@ async def create_document(
         document_id=str(created_document["_id"]),
         action=DocumentAction.CREATED,
         user=current_user,
-        comment=f"Document created: {document_data.title}"
+        comment=f"Document created: {document_data.title}",
     )
 
     # Create notifications for document creation
@@ -146,8 +143,7 @@ async def create_document(
         email_service = EmailService()
 
         notifications = await notification_service.notify_document_created(
-            document=created_document,
-            assigned_user_id=document_data.assigned_to_user_id
+            document=created_document, assigned_user_id=document_data.assigned_to_user_id
         )
 
         # Send emails in background
@@ -161,7 +157,7 @@ async def create_document(
                     title=notif["title"],
                     message=notif["message"],
                     document_number=created_document.get("document_number"),
-                    metadata=notif.get("metadata")
+                    metadata=notif.get("metadata"),
                 )
 
     return convert_document_ids(created_document)
@@ -172,10 +168,7 @@ async def create_document(
     response_model=List[DocumentResponse],
     summary="List Documents",
     description="Get a list of documents with optional filters",
-    responses={
-        200: {"description": "List of documents"},
-        401: {"description": "Not authenticated"}
-    }
+    responses={200: {"description": "List of documents"}, 401: {"description": "Not authenticated"}},
 )
 async def list_documents(
     skip: int = Query(0, ge=0),
@@ -184,7 +177,7 @@ async def list_documents(
     search: Optional[str] = None,
     assigned_to_me: bool = False,
     created_by_me: bool = False,
-    current_user: dict = Depends(require_authenticated)
+    current_user: dict = Depends(require_authenticated),
 ):
     """
     List documents with optional filtering
@@ -207,26 +200,20 @@ async def list_documents(
     # Handle specific user filters
     if assigned_to_me:
         documents = await doc_repo.find_assigned_to_user(
-            user_id=str(current_user["_id"]),
-            skip=skip,
-            limit=limit,
-            status=status.value if status else None
+            user_id=str(current_user["_id"]), skip=skip, limit=limit, status=status.value if status else None
         )
     elif created_by_me:
         documents = await doc_repo.find_by_creator(
             creator_id=str(current_user["_id"]),
             skip=skip,
             limit=limit,
-            status=status.value if status else None
+            status=status.value if status else None,
         )
     elif search:
         # Search documents
         department_id = None if is_admin else str(current_user["department_id"])
         documents = await doc_repo.search_documents(
-            search_query=search,
-            department_id=department_id,
-            skip=skip,
-            limit=limit
+            search_query=search, department_id=department_id, skip=skip, limit=limit
         )
     elif is_admin:
         # Admin sees all documents
@@ -235,10 +222,7 @@ async def list_documents(
             filter_query["status"] = status.value
 
         documents = await doc_repo.find_many(
-            filter=filter_query,
-            skip=skip,
-            limit=limit,
-            sort=[("created_at", -1)]
+            filter=filter_query, skip=skip, limit=limit, sort=[("created_at", -1)]
         )
     else:
         # Non-admins see documents from their department
@@ -246,7 +230,7 @@ async def list_documents(
             department_id=str(current_user["department_id"]),
             skip=skip,
             limit=limit,
-            status=status.value if status else None
+            status=status.value if status else None,
         )
 
     # Convert ObjectIds to strings
@@ -265,13 +249,10 @@ async def list_documents(
         200: {"description": "Document details"},
         401: {"description": "Not authenticated"},
         403: {"description": "Not authorized to view this document"},
-        404: {"description": "Document not found"}
-    }
+        404: {"description": "Document not found"},
+    },
 )
-async def get_document(
-    document_id: str,
-    current_user: dict = Depends(require_authenticated)
-):
+async def get_document(document_id: str, current_user: dict = Depends(require_authenticated)):
     """
     Get document by ID
 
@@ -282,10 +263,7 @@ async def get_document(
     document = await doc_repo.find_by_id(document_id)
 
     if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     # Check permissions
     is_admin = current_user.get("role") == UserRole.ADMIN.value
@@ -299,16 +277,11 @@ async def get_document(
 
     if not can_view:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to view this document"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this document"
         )
 
     # Create audit entry for viewing
-    await create_audit_entry(
-        document_id=document_id,
-        action=DocumentAction.VIEWED,
-        user=current_user
-    )
+    await create_audit_entry(document_id=document_id, action=DocumentAction.VIEWED, user=current_user)
 
     return convert_document_ids(document)
 
@@ -323,14 +296,14 @@ async def get_document(
         400: {"description": "Invalid data"},
         401: {"description": "Not authenticated"},
         403: {"description": "Not authorized to update this document"},
-        404: {"description": "Document not found"}
-    }
+        404: {"description": "Document not found"},
+    },
 )
 async def update_document(
     document_id: str,
     document_data: DocumentUpdate,
     background_tasks: BackgroundTasks,
-    current_user: dict = Depends(require_authenticated)
+    current_user: dict = Depends(require_authenticated),
 ):
     """
     Update a document
@@ -344,10 +317,7 @@ async def update_document(
     # Check if document exists
     existing_doc = await doc_repo.find_by_id(document_id)
     if not existing_doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     # Check permissions
     is_admin = current_user.get("role") == UserRole.ADMIN.value
@@ -359,8 +329,7 @@ async def update_document(
 
     if not can_update:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to update this document"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this document"
         )
 
     # Track old assignment for notification
@@ -388,10 +357,7 @@ async def update_document(
         # Validate user exists
         user = await user_repo.find_by_id(document_data.assigned_to_user_id)
         if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Assigned user not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assigned user not found")
         update_data["assigned_to_user_id"] = document_data.assigned_to_user_id
 
     if document_data.metadata is not None:
@@ -401,17 +367,11 @@ async def update_document(
     updated_document = await doc_repo.update_by_id(document_id, update_data)
 
     if not updated_document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     # Create audit trail entry
     await create_audit_entry(
-        document_id=document_id,
-        action=DocumentAction.MODIFIED,
-        user=current_user,
-        comment="Document updated"
+        document_id=document_id, action=DocumentAction.MODIFIED, user=current_user, comment="Document updated"
     )
 
     # Create notification if assignment changed
@@ -423,7 +383,7 @@ async def update_document(
         notification = await notification_service.notify_document_assigned(
             document=updated_document,
             new_assignee_id=new_assignee,
-            assigned_by_name=current_user.get("full_name", "Unknown")
+            assigned_by_name=current_user.get("full_name", "Unknown"),
         )
 
         if notification:
@@ -436,7 +396,7 @@ async def update_document(
                     title=notification["title"],
                     message=notification["message"],
                     document_number=updated_document.get("document_number"),
-                    metadata=notification.get("metadata")
+                    metadata=notification.get("metadata"),
                 )
 
     return convert_document_ids(updated_document)
@@ -452,14 +412,14 @@ async def update_document(
         400: {"description": "Invalid department or user"},
         401: {"description": "Not authenticated"},
         403: {"description": "Not authorized to forward this document"},
-        404: {"description": "Document not found"}
-    }
+        404: {"description": "Document not found"},
+    },
 )
 async def forward_document(
     document_id: str,
     forward_data: DocumentForward,
     background_tasks: BackgroundTasks,
-    current_user: dict = Depends(require_authenticated)
+    current_user: dict = Depends(require_authenticated),
 ):
     """
     Forward a document to another department
@@ -473,32 +433,23 @@ async def forward_document(
     # Check if document exists
     document = await doc_repo.find_by_id(document_id)
     if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     # Check if target department exists
     target_dept = await dept_repo.find_by_id(forward_data.to_department_id)
     if not target_dept:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Target department not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target department not found")
 
     # Check if assigned user exists (if provided)
     if forward_data.assigned_to_user_id:
         assigned_user = await user_repo.find_by_id(forward_data.assigned_to_user_id)
         if not assigned_user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Assigned user not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assigned user not found")
         # Check if user belongs to target department
         if str(assigned_user["department_id"]) != forward_data.to_department_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Assigned user must belong to the target department"
+                detail="Assigned user must belong to the target department",
             )
 
     # Check permissions
@@ -511,8 +462,7 @@ async def forward_document(
 
     if not can_forward:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to forward this document"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to forward this document"
         )
 
     # Store the old department for audit trail
@@ -522,7 +472,7 @@ async def forward_document(
     updated_document = await doc_repo.forward_document(
         document_id=document_id,
         to_department_id=forward_data.to_department_id,
-        assigned_to_user_id=forward_data.assigned_to_user_id
+        assigned_to_user_id=forward_data.assigned_to_user_id,
     )
 
     # Create audit trail entry
@@ -532,7 +482,7 @@ async def forward_document(
         user=current_user,
         from_department_id=from_department_id,
         to_department_id=forward_data.to_department_id,
-        comment=forward_data.comment
+        comment=forward_data.comment,
     )
 
     # Create notifications for document forwarding
@@ -544,7 +494,7 @@ async def forward_document(
         from_department_id=from_department_id,
         to_department_id=forward_data.to_department_id,
         assigned_user_id=forward_data.assigned_to_user_id,
-        forwarded_by_name=current_user.get("full_name", "Unknown")
+        forwarded_by_name=current_user.get("full_name", "Unknown"),
     )
 
     # Send emails in background
@@ -558,7 +508,7 @@ async def forward_document(
                 title=notif["title"],
                 message=notif["message"],
                 document_number=updated_document.get("document_number"),
-                metadata=notif.get("metadata")
+                metadata=notif.get("metadata"),
             )
 
     return convert_document_ids(updated_document)
@@ -573,14 +523,14 @@ async def forward_document(
         200: {"description": "Status updated successfully"},
         401: {"description": "Not authenticated"},
         403: {"description": "Not authorized to update status"},
-        404: {"description": "Document not found"}
-    }
+        404: {"description": "Document not found"},
+    },
 )
 async def update_document_status(
     document_id: str,
     status_data: DocumentStatusUpdate,
     background_tasks: BackgroundTasks,
-    current_user: dict = Depends(require_authenticated)
+    current_user: dict = Depends(require_authenticated),
 ):
     """
     Update document status
@@ -592,10 +542,7 @@ async def update_document_status(
     # Check if document exists
     document = await doc_repo.find_by_id(document_id)
     if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     # Check permissions
     is_admin = current_user.get("role") == UserRole.ADMIN.value
@@ -607,8 +554,7 @@ async def update_document_status(
 
     if not can_update_status:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to update document status"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update document status"
         )
 
     # Store old status for audit
@@ -616,8 +562,7 @@ async def update_document_status(
 
     # Update status
     updated_document = await doc_repo.update_status(
-        document_id=document_id,
-        new_status=status_data.status.value
+        document_id=document_id, new_status=status_data.status.value
     )
 
     # Create audit trail entry
@@ -627,7 +572,7 @@ async def update_document_status(
         user=current_user,
         old_status=old_status,
         new_status=status_data.status.value,
-        status_reason=status_data.reason
+        status_reason=status_data.reason,
     )
 
     # Create notifications for status change
@@ -639,7 +584,7 @@ async def update_document_status(
         document=updated_document,
         old_status=old_status,
         new_status=status_data.status.value,
-        changed_by_name=current_user.get("full_name", "Unknown")
+        changed_by_name=current_user.get("full_name", "Unknown"),
     )
 
     # Send emails in background
@@ -653,7 +598,7 @@ async def update_document_status(
                 title=notif["title"],
                 message=notif["message"],
                 document_number=updated_document.get("document_number"),
-                metadata=notif.get("metadata")
+                metadata=notif.get("metadata"),
             )
 
     return convert_document_ids(updated_document)
@@ -668,13 +613,10 @@ async def update_document_status(
         200: {"description": "Document history"},
         401: {"description": "Not authenticated"},
         403: {"description": "Not authorized to view this document"},
-        404: {"description": "Document not found"}
-    }
+        404: {"description": "Document not found"},
+    },
 )
-async def get_document_history(
-    document_id: str,
-    current_user: dict = Depends(require_authenticated)
-):
+async def get_document_history(document_id: str, current_user: dict = Depends(require_authenticated)):
     """
     Get complete audit trail for a document
 
@@ -686,10 +628,7 @@ async def get_document_history(
     # Check if document exists
     document = await doc_repo.find_by_id(document_id)
     if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     # Check permissions (same as viewing document)
     is_admin = current_user.get("role") == UserRole.ADMIN.value
@@ -702,8 +641,7 @@ async def get_document_history(
 
     if not can_view:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to view this document's history"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this document's history"
         )
 
     # Get history
@@ -724,13 +662,10 @@ async def get_document_history(
         200: {"description": "Document archived successfully"},
         401: {"description": "Not authenticated"},
         403: {"description": "Not authorized to archive this document"},
-        404: {"description": "Document not found"}
-    }
+        404: {"description": "Document not found"},
+    },
 )
-async def archive_document(
-    document_id: str,
-    current_user: dict = Depends(require_authenticated)
-):
+async def archive_document(document_id: str, current_user: dict = Depends(require_authenticated)):
     """
     Archive a document
 
@@ -741,10 +676,7 @@ async def archive_document(
     # Check if document exists
     document = await doc_repo.find_by_id(document_id)
     if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
     # Check permissions
     is_admin = current_user.get("role") == UserRole.ADMIN.value
@@ -752,8 +684,7 @@ async def archive_document(
 
     if not (is_admin or is_creator):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to archive this document"
+            status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to archive this document"
         )
 
     # Archive document
@@ -764,27 +695,19 @@ async def archive_document(
         document_id=document_id,
         action=DocumentAction.ARCHIVED,
         user=current_user,
-        comment="Document archived"
+        comment="Document archived",
     )
 
-    return {
-        "success": True,
-        "message": f"Document {document.get('document_number')} archived successfully"
-    }
+    return {"success": True, "message": f"Document {document.get('document_number')} archived successfully"}
 
 
 @router.get(
     "/stats/overview",
     summary="Get Document Statistics",
     description="Get document statistics for the system or department",
-    responses={
-        200: {"description": "Document statistics"},
-        401: {"description": "Not authenticated"}
-    }
+    responses={200: {"description": "Document statistics"}, 401: {"description": "Not authenticated"}},
 )
-async def get_document_stats(
-    current_user: dict = Depends(require_authenticated)
-):
+async def get_document_stats(current_user: dict = Depends(require_authenticated)):
     """
     Get document statistics
 
@@ -794,6 +717,11 @@ async def get_document_stats(
     doc_repo = DocumentRepository()
 
     is_admin = current_user.get("role") == UserRole.ADMIN.value
+    department_id = None if is_admin else str(current_user["department_id"])
+
+    stats = await doc_repo.get_document_stats(department_id=department_id)
+
+    return stats
     department_id = None if is_admin else str(current_user["department_id"])
 
     stats = await doc_repo.get_document_stats(department_id=department_id)
